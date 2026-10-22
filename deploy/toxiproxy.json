@@ -1,0 +1,5 @@
+[
+ {"name":"shard-0","listen":"0.0.0.0:15432","upstream":"shard-0:5432","enabled":true},
+ {"name":"shard-1","listen":"0.0.0.0:15433","upstream":"shard-1:5432","enabled":true},
+ {"name":"kafka","listen":"0.0.0.0:19092","upstream":"kafka:9092","enabled":true}
+]

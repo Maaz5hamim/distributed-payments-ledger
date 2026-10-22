@@ -1,0 +1,20 @@
+groups:
+  - name: ledger
+    rules:
+      - alert: LedgerMismatch
+        expr: ledger_reconciliation_mismatches{job="ledger-reconciler"} > 0
+        for: 0m
+        labels:
+          severity: critical
+      - alert: ReconciliationUnavailable
+        expr: ledger_reconciliation_success{job="ledger-reconciler"} == 0 or time() - ledger_reconciliation_last_success_timestamp_seconds{job="ledger-reconciler"} > 60
+        for: 30s
+      - alert: LedgerSagasStuck
+        expr: ledger_saga_stuck{job="ledger-reconciler"} > 0
+        for: 1m
+      - alert: LedgerOutboxLag
+        expr: ledger_outbox_lag_seconds{job="ledger-reconciler"} > 60
+        for: 1m
+      - alert: LedgerExporterDown
+        expr: up{job=~"ledger-.*"} == 0
+        for: 30s

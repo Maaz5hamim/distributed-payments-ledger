@@ -1,0 +1,149 @@
+name: distributed-payments-ledger
+x-db: &db
+  image: postgres:17-alpine
+  environment:
+    POSTGRES_USER: ledger
+    POSTGRES_PASSWORD: ledger
+    POSTGRES_DB: ledger
+  healthcheck:
+    test: [CMD-SHELL, 'pg_isready -U ledger']
+    interval: 2s
+    timeout: 2s
+    retries: 30
+x-env: &env
+  COORDINATOR_URL: postgres://ledger:ledger@coordinator:5432/ledger?sslmode=disable
+  SHARD_URLS: postgres://ledger:ledger@toxiproxy:15432/ledger?sslmode=disable,postgres://ledger:ledger@toxiproxy:15433/ledger?sslmode=disable
+  API_KEY: ${API_KEY:-local-development-key}
+  KAFKA_BROKERS: toxiproxy:19092
+x-app: &app
+  image: ledger:local
+  build: ..
+  environment: *env
+  restart: unless-stopped
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+services:
+  coordinator:
+    <<: *db
+    volumes: ['coordinator-data:/var/lib/postgresql/data']
+  shard-0:
+    <<: *db
+    volumes: ['shard-0-data:/var/lib/postgresql/data']
+  shard-1:
+    <<: *db
+    volumes: ['shard-1-data:/var/lib/postgresql/data']
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    command: ['-host=0.0.0.0', '-config=/config/toxiproxy.json']
+    ports: ['127.0.0.1:8474:8474']
+    volumes: ['./toxiproxy.json:/config/toxiproxy.json:ro']
+    depends_on:
+      shard-0:
+        condition: service_healthy
+      shard-1:
+        condition: service_healthy
+  migrate:
+    image: ledger:local
+    build: ..
+    environment: *env
+    command: ledger-migrate
+    depends_on:
+      coordinator:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_started
+  api:
+    <<: *app
+    ports: ['127.0.0.1:8080:8080']
+  worker:
+    <<: *app
+    command: ledger-worker
+  relay:
+    <<: *app
+    command: ledger-relay
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+  consumer:
+    <<: *app
+    command: ledger-consumer
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+  reconciler:
+    <<: *app
+    command: ledger-reconciler
+    ports: ['127.0.0.1:9091:9090']
+  kafka:
+    image: apache/kafka:3.9.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://toxiproxy:19092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes: ['kafka-data:/var/lib/kafka/data']
+    healthcheck:
+      test: [CMD-SHELL, '/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list']
+      interval: 10s
+      timeout: 10s
+      retries: 20
+  kafka-init:
+    image: apache/kafka:3.9.0
+    entrypoint: /opt/kafka/bin/kafka-topics.sh
+    command: ['--bootstrap-server', 'kafka:9092', '--create', '--if-not-exists', '--topic', 'transfer-events', '--partitions', '6', '--replication-factor', '1']
+    depends_on:
+      kafka:
+        condition: service_healthy
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    volumes: ['./prometheus.yml:/etc/prometheus/prometheus.yml:ro', './alerts.yml:/etc/prometheus/alerts.yml:ro', 'prometheus-data:/prometheus']
+    ports: ['127.0.0.1:9092:9090']
+  grafana:
+    image: grafana/grafana:11.6.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-local-grafana-password}
+    volumes: ['./grafana/provisioning:/etc/grafana/provisioning:ro', './grafana/dashboard.json:/var/lib/grafana/dashboards/ledger.json:ro', 'grafana-data:/var/lib/grafana']
+    ports: ['127.0.0.1:3000:3000']
+  test:
+    image: golang:1.25
+    profiles: [tools]
+    working_dir: /src
+    environment:
+      TEST_DATABASE_URL: postgres://ledger:ledger@coordinator:5432/ledger?sslmode=disable
+    volumes: ['..:/src:ro', 'go-cache:/go', 'go-build-cache:/root/.cache/go-build']
+    command: [go, test, -race, -count=1, ./...]
+    depends_on:
+      coordinator:
+        condition: service_healthy
+  k6:
+    image: grafana/k6:0.57.0
+    profiles: [tools]
+    environment:
+      BASE_URL: http://api:8080
+      API_KEY: ${API_KEY:-local-development-key}
+      RATE: ${RATE:-20}
+      DURATION: ${DURATION:-60s}
+    volumes: ['../loadtest:/scripts:ro']
+    command: ['run', '/scripts/transfers.js']
+volumes:
+  coordinator-data:
+  shard-0-data:
+  shard-1-data:
+  kafka-data:
+  prometheus-data:
+  grafana-data:
+  go-cache:
+  go-build-cache:

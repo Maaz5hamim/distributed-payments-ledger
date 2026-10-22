@@ -1,0 +1,7 @@
+.env
+bin/
+results/
+*.test
+.DS_Store
+deploy/generated-*.json
+__pycache__/
