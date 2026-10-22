@@ -138,7 +138,7 @@ When a transfer moves across two different database shards, it follows a multi-s
 4. **CANCELLING / REVERSED:** If the receiver's shard is unreachable or rejects the transfer, the system double-checks that the target account wasn't credited, blocks future attempts, and safely refunds the sender.
 
 
-## 🛡️ Key Safety Features (Without the Jargon)
+## 🛡️ Key Safety Features
 
 * **Zero-Sum Guarantee:** Money is never created or destroyed. Every credit has an equal debit.
 * **Duplicate Protection (Idempotency):** If a user clicks "Pay" three times by mistake, the system processes it only once and returns the cached result for the extra clicks.
